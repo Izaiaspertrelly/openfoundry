@@ -1,5 +1,5 @@
 version: v2
-name: buf.build/open-foundry/api
+name: buf.build/izaiaspertrelly/api
 lint:
   use:
     - MINIMAL

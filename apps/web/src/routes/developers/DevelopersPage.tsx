@@ -31,8 +31,8 @@ function createEmptyIntegrationDraft(repository?: RepositoryDefinition | null): 
     external_namespace: 'openfoundry-labs',
     external_project: repository?.slug ?? 'plugin-starter',
     external_url: repository
-      ? `https://github.com/openfoundry-labs/${repository.slug}`
-      : 'https://github.com/openfoundry-labs/plugin-starter',
+      ? `https://github.com/Izaiaspertrelly/${repository.slug}`
+      : 'https://github.com/Izaiaspertrelly/openfoundry',
     sync_mode: 'bidirectional_mirror',
     ci_trigger_strategy: 'github_actions',
     status: 'connected',
@@ -165,7 +165,7 @@ export function DevelopersPage() {
         next.default_branch = repository?.default_branch ?? next.default_branch;
         next.external_project = repository?.slug ?? next.external_project;
         next.external_url = repository
-          ? `https://github.com/openfoundry-labs/${repository.slug}`
+          ? `https://github.com/Izaiaspertrelly/${repository.slug}`
           : next.external_url;
         next.branch_mapping_text = `${repository?.default_branch ?? next.default_branch} -> ${repository?.default_branch ?? next.default_branch}`;
         setSyncDraft((sd) => ({ ...sd, branch_name: repository?.default_branch ?? sd.branch_name }));

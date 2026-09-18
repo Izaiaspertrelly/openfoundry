@@ -42,6 +42,7 @@ jobs:
         with:
           lint: true
           input: proto
+          push: false
 
   openapi:
     name: OpenAPI Drift Check

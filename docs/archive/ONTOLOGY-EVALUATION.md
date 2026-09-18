@@ -373,7 +373,7 @@ OpenFoundry no tiene nada equivalente. Es una de las brechas más grandes para a
 - [ ] **H5.** **SDK oficiales** generados con `services/sdk-generation-service`:
     - Python (`openfoundry-sdk` con tipos generados desde la ontología)
     - TypeScript (`@openfoundry/sdk` con type-safe Object/Action accessors)
-    - Go (`github.com/openfoundry/sdk-go`)
+    - Go (`github.com/Izaiaspertrelly/openfoundry`)
     - Java/Kotlin
 - [ ] **H6.** **Function authoring UI**: editor con autocompletion de la ontología, type-checking en vivo, dry-run.
 - [ ] **H7.** **Function cost tracking**: CPU·s, memory·s, network bytes, llamadas a LLM por invocación.

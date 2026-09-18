@@ -6,7 +6,7 @@ serviceAccount:
   annotations: {}
 
 image:
-  registry: ghcr.io/openfoundry
+  registry: ghcr.io/izaiaspertrelly
   tag: "0.1.0"
 
 global:
