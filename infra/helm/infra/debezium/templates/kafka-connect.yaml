@@ -1,0 +1,164 @@
+---
+# S4.1.b — Strimzi KafkaConnect cluster running Debezium 2.x.
+#
+# Two replicas (HA), JBOD-less stateless pods (Connect persists
+# offsets in the internal Kafka topics declared below). The image
+# is built once at deploy time via Strimzi's `build` block — we add
+# the Apicurio Avro converter and the Debezium outbox SMT.
+#
+# Internal Connect topics (`config`, `offset`, `status`) use RF=3
+# and are owned exclusively by this Connect cluster (see ACLs in
+# `kafka-user-debezium-connect.yaml`).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: debezium
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: openfoundry
+    openfoundry.io/component: debezium-connect
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  replicas: 1
+  bootstrapServers: openfoundry-kafka-bootstrap.kafka.svc:{{ if .Values.kafkaAuth.enabled }}9093{{ else }}9092{{ end }}
+  # Strimzi 1.0 promoted these from `spec.config` to first-class
+  # fields and made them required.
+  groupId: debezium-connect
+  configStorageTopic: __debezium-connect-configs
+  offsetStorageTopic: __debezium-connect-offsets
+  statusStorageTopic: __debezium-connect-status
+  # Strimzi `build:` produces a Connect image starting from the
+  # operator's base (which carries the kafka_connect_run.sh entry
+  # Strimzi expects) and layers the Debezium PostgreSQL connector
+  # plugin on top. The result is pushed to the in-cluster registry
+  # over plain HTTP — `additionalKanikoOptions` switches kaniko to
+  # insecure mode, and the kubelet/containerd mirror configured at
+  # `/etc/rancher/k3s/registries.yaml` on each node lets the Connect
+  # pod pull it back.
+  build:
+    output:
+      type: docker
+      image: registry.registry.svc.cluster.local:5000/openfoundry/debezium-connect:2.7.0
+      pushSecret: registry-local-pull
+      # The local dev registry serves plain HTTP. The Strimzi operator
+      # uses Buildah by default — `--tls-verify=false` on push tells
+      # Buildah to skip TLS for the in-cluster registry. Kaniko-style
+      # `--insecure*` flags are not accepted under the Buildah feature
+      # gate.
+      additionalPushOptions:
+        - --tls-verify=false
+    plugins:
+      - name: debezium-postgres-connector
+        artifacts:
+          - type: tgz
+            url: https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/2.7.0.Final/debezium-connector-postgres-2.7.0.Final-plugin.tar.gz
+  {{- if .Values.kafkaAuth.enabled }}
+  authentication:
+    type: tls
+    certificateAndKey:
+      secretName: debezium-connect-user
+      certificate: user.crt
+      key: user.key
+  tls:
+    trustedCertificates:
+      - secretName: openfoundry-cluster-ca-cert
+        certificate: ca.crt
+  {{- end }}
+  config:
+    # Single-broker dev — RF and ISR cannot exceed broker count.
+    config.storage.replication.factor: 1
+    offset.storage.replication.factor: 1
+    status.storage.replication.factor: 1
+    config.storage.partitions: 1
+    offset.storage.partitions: 25
+    status.storage.partitions: 5
+    # Default JSON converters (Apicurio Avro is the prod-only path).
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "false"
+    value.converter.schemas.enable: "false"
+    # Producer hardening: full ISR ack, idempotence, deterministic
+    # ordering. Combined with the application-side deterministic
+    # `event_id`, a task restart cannot duplicate a record.
+    producer.acks: all
+    producer.enable.idempotence: "true"
+    producer.max.in.flight.requests.per.connection: "5"
+    producer.compression.type: zstd
+    # Source connectors poll the WAL slot — keep the read-side budget
+    # tight so we surface stalls quickly.
+    consumer.fetch.min.bytes: "1"
+    # Health & observability.
+    metrics.recording.level: INFO
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  jvmOptions:
+    "-Xms": 1536m
+    "-Xmx": 1536m
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: debezium-connect-metrics
+        key: metrics-config.yaml
+  template:
+    pod:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              strimzi.io/cluster: debezium
+              strimzi.io/kind: KafkaConnect
+    # Buildah extracts image layers via mount-namespace setup that
+    # needs CAP_SYS_ADMIN ("remount /, flags: 0x44000: permission
+    # denied"). For the dev cluster we let the build container run
+    # privileged — the connect runtime pods are still unprivileged.
+    # The `vfs`/`chroot` env keeps Buildah off the overlay driver.
+    buildContainer:
+      securityContext:
+        privileged: true
+      env:
+        - name: STORAGE_DRIVER
+          value: vfs
+        - name: BUILDAH_ISOLATION
+          value: chroot
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: debezium-connect-metrics
+  namespace: kafka
+data:
+  metrics-config.yaml: |
+    lowercaseOutputName: true
+    rules:
+      - pattern: "kafka.connect<type=connect-worker-metrics><>([a-zA-Z-]+)"
+        name: kafka_connect_worker_$1
+        type: GAUGE
+      - pattern: "kafka.connect<type=connect-worker-metrics, connector=([^>]+)><>([a-zA-Z-]+)"
+        name: kafka_connect_worker_connector_$2
+        type: GAUGE
+        labels:
+          connector: "$1"
+      - pattern: "kafka.connect<type=connector-task-metrics, connector=([^,]+), task=([0-9]+)><>([a-zA-Z-]+)"
+        name: kafka_connect_connector_task_$3
+        type: GAUGE
+        labels:
+          connector: "$1"
+          task: "$2"
+      - pattern: "kafka.connect<type=connect-coordinator-metrics><>([a-zA-Z-]+)"
+        name: kafka_connect_coordinator_$1
+        type: GAUGE
+      - pattern: "debezium.postgres<type=connector-metrics, context=(streaming|snapshot), server=([^>]+)><>([a-zA-Z-]+)"
+        name: debezium_postgres_$3
+        type: GAUGE
+        labels:
+          context: "$1"
+          server: "$2"

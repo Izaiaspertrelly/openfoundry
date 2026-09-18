@@ -1,0 +1,82 @@
+{{- with .Values.kafka }}
+---
+# Strimzi Kafka cluster for OpenFoundry's data plane.
+#
+# KRaft mode (no ZooKeeper). The KafkaNodePool below carries both
+# `controller` and `broker` roles on the same pods (combined mode).
+# Replicas, RF and ISR follow ADR-0013: prod = 3 brokers RF=3 ISR=2;
+# dev = 1 broker RF=1 ISR=1.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: kafka
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    strimzi.io/cluster: {{ .clusterName }}
+spec:
+  replicas: {{ .replicas }}
+  roles:
+    {{- toYaml .roles | nindent 4 }}
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: {{ .storageSize }}
+        kraftMetadata: shared
+        deleteClaim: false
+        class: {{ .storageClass }}
+  resources:
+    {{- toYaml .resources | nindent 4 }}
+  jvmOptions:
+    -Xms: {{ .heapSize }}
+    -Xmx: {{ .heapSize }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: {{ .clusterName }}
+  namespace: {{ $.Release.Namespace }}
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: {{ .version | quote }}
+    metadataVersion: {{ .metadataVersion | quote }}
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      {{- if .tlsListener }}
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+        authentication:
+          type: tls
+      {{- end }}
+    config:
+      default.replication.factor: {{ .replicationFactor }}
+      min.insync.replicas: {{ .minInsyncReplicas }}
+      offsets.topic.replication.factor: {{ .replicationFactor }}
+      transaction.state.log.replication.factor: {{ .replicationFactor }}
+      transaction.state.log.min.isr: {{ .minInsyncReplicas }}
+      unclean.leader.election.enable: false
+      auto.create.topics.enable: false
+      log.retention.hours: 168
+      num.partitions: {{ .numPartitions }}
+      compression.type: producer
+      {{- if gt (int .replicas) 1 }}
+      replica.selector.class: >-
+        org.apache.kafka.common.replica.RackAwareReplicaSelector
+      {{- end }}
+    {{- if gt (int .replicas) 1 }}
+    rack:
+      topologyKey: topology.kubernetes.io/zone
+    {{- end }}
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+{{- end }}

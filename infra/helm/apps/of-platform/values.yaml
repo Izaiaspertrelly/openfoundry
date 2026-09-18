@@ -1,0 +1,262 @@
+# of-platform values — owns gateway, identity, authz, tenancy, the
+# shared ingress, and the cross-release platform profile ConfigMap.
+release: of-platform
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+image:
+  registry: ghcr.io/openfoundry
+  tag: "0.1.0"
+
+global:
+  imagePullPolicy: IfNotPresent
+  imageRegistry: ""
+  imagePullSecrets: []
+  existingSecret: open-foundry-env
+  publicWebOrigin: https://openfoundry.example.com
+  labels:
+    app.kubernetes.io/part-of: openfoundry
+  podAnnotations: {}
+  podSecurityContext:
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    readOnlyRootFilesystem: false
+  terminationGracePeriodSeconds: 30
+  topologySpreadConstraints:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  networkPolicy:
+    enabled: true
+    allowSameNamespaceTraffic: true
+    additionalEgressCidrs: []
+  platformProfile:
+    enabled: true
+    configMapName: openfoundry-platform-profile
+  probes:
+    readiness:
+      enabled: true
+      path: /healthz
+      initialDelaySeconds: 8
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+    liveness:
+      enabled: true
+      path: /healthz
+      initialDelaySeconds: 20
+      periodSeconds: 20
+      timeoutSeconds: 3
+      failureThreshold: 3
+  deploymentFabric:
+    cloud: kubernetes
+    environment: shared
+    cell: core
+    region: global
+    multiCloud:
+      enabled: false
+      activeProvider: ""
+      workloadIdentity:
+        awsRoleArn: ""
+        gcpServiceAccount: ""
+        azureClientId: ""
+      providers: []
+    airGap:
+      enabled: false
+      privateRegistry: ""
+      releaseBundle: ""
+      disablePublicEgress: false
+      mirrorRegistries: []
+      allowedEgressCidrs: []
+    geoRestrictions:
+      enabled: false
+      allowedCountries: []
+      allowedIngressCidrs: []
+      allowedEgressCidrs: []
+      ingressAnnotations: {}
+      requiredNodeLabels: {}
+      residencyLabel: ""
+  cassandra:
+    localDc: dc1
+  kafka:
+    bootstrap: ""
+    topicPrefix: ""
+
+# S8.5 — single ingress entrypoint owned by of-platform; the other
+# releases consume the same hostname through shared service discovery.
+ingress:
+  enabled: true
+  className: traefik
+  host: openfoundry.local
+  path: /
+  pathType: Prefix
+  serviceName: edge-gateway-service
+  servicePort: 8080
+  annotations: {}
+  tls: []
+
+# S8.3 — Postgres migrations as Helm pre-upgrade Jobs.
+migrations:
+  pg-schemas:
+    enabled: true
+    dsnSecret:
+      name: pg-schemas-app
+      key: dsn
+  pg-policy:
+    enabled: true
+    dsnSecret:
+      name: pg-policy-app
+      key: dsn
+
+# `approvalsTimeoutSweep` moved to `infra/helm/apps/of-apps-ops/values.yaml`
+# (S8 merge — the `approvals-service` runtime now lives inside
+# `workflow-automation-service` under `of-apps-ops`).
+
+apollo:
+  enabled: false
+  schedule: "*/15 * * * *"
+  actionMode: observe
+  image:
+    repository: curlimages/curl
+    tag: "8.8.0"
+  gatewayUrl: ""
+  readinessPath: /api/v1/control-panel/upgrade-readiness
+  fleetsPath: /api/v1/marketplace/devops/fleets
+  reconcileFleetIds: []
+  promoteWebhookPath: ""
+  tokenSecretName: open-foundry-apollo
+  tokenSecretKey: token
+  env: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+services:
+  edge-gateway-service:
+    replicas: 3
+    ports:
+      - name: http
+        containerPort: 8080
+    env:
+      RUST_LOG: info
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 2
+
+  identity-federation-service:
+    replicas: 2
+    ports:
+      - name: http
+        containerPort: 8080
+    env:
+      RUST_LOG: info
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+
+  authorization-policy-service:
+    replicas: 2
+    ports:
+      - name: http
+        containerPort: 8080
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+
+  tenancy-organizations-service:
+    replicas: 2
+    ports:
+      - name: http
+        containerPort: 8080
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    pdb:
+      enabled: true
+      minAvailable: 1
+
+  # ── Platform-wide services completed (S8.6 — full coverage) ──────────
+  # S8 / ADR-0030 (B14) — `cipher-service`, `network-boundary-service`,
+  # `checkpoints-purpose-service` and `security-governance-service`
+  # merged → `authorization-policy-service`. The cipher / network
+  # boundary / checkpoints+purpose / security governance domains now
+  # live as library namespaces in the consolidated authorization-policy
+  # binary; the runtime wiring into main is a follow-up.
+
+  # S8 / ADR-0030 (B16) — `session-governance-service` and
+  # `oauth-integration-service` (auth-side) merged →
+  # `identity-federation-service`. The data-side oauth modules
+  # (oauth_clients / applications / external_integrations) are
+  # currently co-located in identity-federation; extraction to
+  # connector-management-service is a follow-up. No standalone
+  # Deployments render here.
+

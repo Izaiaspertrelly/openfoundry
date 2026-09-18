@@ -1,0 +1,53 @@
+{{- /*
+FASE 11 / Tarea 11.4 — TEMPORAL_* env injection retired.
+
+Pre-FASE-7 this template detected `workflow-automation-service`
+and `automation-operations-service` by name and overlaid
+TEMPORAL_HOST_PORT + TEMPORAL_NAMESPACE + TEMPORAL_REQUIRE_REAL_CLIENT
++ TEMPORAL_TASK_QUEUE_* env vars onto their Deployments. Those
+services no longer read those env vars (they consume Kafka topics
+directly per ADR-0037), so the injection block is gone. The
+template is now a plain `range .Values.services` that emits the
+standard Deployment + Service + NetworkPolicy + optional
+HPA/ScaledObject/PDB shape via the of-shared partials.
+*/ -}}
+{{- $release := .Values.release -}}
+{{- range $name, $svc := .Values.services }}
+{{- if not (hasKey $svc "enabled") }}{{- $_ := set $svc "enabled" true -}}{{- end }}
+{{- if $svc.enabled }}
+---
+{{- $ctx := dict
+    "root" $
+    "name" $name
+    "release" $release
+    "image" (include "of-shared.image" (dict "root" $ "name" $name "service" $svc))
+    "service" $svc
+}}
+{{ include "of-shared.serviceaccount" (dict "root" $ "name" $name "release" $release "annotations" (default dict $svc.serviceAccountAnnotations)) }}
+---
+{{ include "of-shared.deployment" $ctx }}
+---
+{{ include "of-shared.service" $ctx }}
+---
+{{ include "of-shared.networkpolicy" (merge $ctx (dict "allowFrom" (list))) }}
+{{- if $svc.autoscaling }}
+{{- if $svc.autoscaling.enabled }}
+---
+{{ include "of-shared.hpa" (dict "root" $ "name" $name "release" $release "autoscaling" $svc.autoscaling) }}
+{{- if and $svc.autoscaling.keda $svc.autoscaling.keda.enabled }}
+---
+{{ include "of-shared.scaledobject" (dict "root" $ "name" $name "release" $release "autoscaling" $svc.autoscaling) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $globalPdb := ($.Values.global.podDisruptionBudget | default dict) -}}
+{{- $pdb := $svc.pdb | default (dict) -}}
+{{- if not (hasKey $pdb "enabled") }}
+  {{- $_ := set $pdb "enabled" ($globalPdb.enabled | default false) -}}
+{{- end }}
+{{- if and $pdb $pdb.enabled }}
+---
+{{ include "of-shared.pdb" (dict "root" $ "name" $name "release" $release "pdb" (mergeOverwrite (dict) $globalPdb $pdb)) }}
+{{- end }}
+{{- end }}
+{{- end }}

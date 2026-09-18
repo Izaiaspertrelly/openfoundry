@@ -1,0 +1,64 @@
+name: Chaos Smoke (Data Plane no-SPOF)
+
+# Suite de chaos cara: solo nightly + manual. Nunca en PRs.
+on:
+  workflow_dispatch:
+  schedule:
+    # 04:17 UTC para no chocar con otros nightlies.
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chaos-smoke
+  cancel-in-progress: false
+
+jobs:
+  chaos:
+    name: DP chaos suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        env:
+          CHAOS_KUBECONFIG: ${{ secrets.CHAOS_KUBECONFIG }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CHAOS_KUBECONFIG:-}" ]]; then
+            echo "Secret CHAOS_KUBECONFIG no configurado; se asume kubeconfig presente en el runner" >&2
+            exit 0
+          fi
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$CHAOS_KUBECONFIG" > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build of-cli
+        run: |
+          mkdir -p bin
+          go build -trimpath -o bin/of ./tools/of-cli
+
+      - name: Run chaos suite
+        env:
+          OF_CLI: "./bin/of"
+        run: ./smoke/chaos/run.sh
+
+      - name: Upload chaos results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-results
+          path: smoke/results/chaos/
+          if-no-files-found: ignore

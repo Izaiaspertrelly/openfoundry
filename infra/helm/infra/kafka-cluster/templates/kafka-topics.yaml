@@ -1,0 +1,60 @@
+{{- if .Values.topics.enabled }}
+{{- /*
+  Data-plane KafkaTopic CRs.
+
+  Single source of truth lives in `values.yaml` under `topics.list`;
+  this file is just the loop. To add or change a topic, edit
+  `values.yaml` (and the matching `values-<env>.yaml` overlay if its
+  shape needs to differ across profiles).
+
+  Every entry inherits `topics.defaults`, then the cluster-wide
+  `kafka.replicationFactor` / `kafka.minInsyncReplicas` (so the same
+  list works for dev=RF1/ISR1 and prod=RF3/ISR2 from the cluster
+  values), and finally any per-entry override on the list item itself.
+
+  Naming conventions (see ADR-0022 and topics-domain-v1.yaml header):
+    * `<domain>.<entity>.v<N>` — versioned domain events from the outbox
+    * `cdc.<source>`           — CDC streams (Debezium connectors)
+    * `__dlq.<topic>`          — dead-letter queue for `<topic>`
+    * `audit.events`           — long-retention compliance log
+*/ -}}
+{{- $defaults := .Values.topics.defaults | default dict }}
+{{- $clusterRf  := .Values.kafka.replicationFactor }}
+{{- $clusterIsr := .Values.kafka.minInsyncReplicas }}
+{{- range .Values.topics.list }}
+{{- /* Topic names like `__dlq.automate.condition.v1` carry leading
+       underscores and dots that are illegal in a Kubernetes
+       `metadata.name` (RFC 1123). Sanitize for the resource name
+       and pin the original via `spec.topicName`. */}}
+{{- $resourceName := regexReplaceAll "[^a-z0-9]+" (lower .name) "-" }}
+{{- $resourceName = trimAll "-" $resourceName }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ $resourceName }}
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: {{ $.Values.kafka.clusterName }}
+    openfoundry.io/topic-class: {{ .class | default "domain" }}
+    {{- with .domain }}
+    openfoundry.io/domain: {{ . }}
+    {{- end }}
+    {{- with .version }}
+    openfoundry.io/version: {{ . }}
+    {{- end }}
+spec:
+  topicName: {{ .name | quote }}
+  partitions: {{ .partitions | default $defaults.partitions }}
+  replicas: {{ .replicas | default $clusterRf }}
+  config:
+    min.insync.replicas: {{ .minInsyncReplicas | default $clusterIsr | quote }}
+    cleanup.policy: {{ .cleanupPolicy | default $defaults.cleanupPolicy }}
+    retention.ms: {{ .retentionMs | default $defaults.retentionMs | quote }}
+    compression.type: {{ .compressionType | default $defaults.compressionType }}
+    {{- $segment := .segmentMs | default $defaults.segmentMs }}
+    {{- with $segment }}
+    segment.ms: {{ . | quote }}
+    {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,240 @@
+release: of-ml-aip
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+image:
+  registry: ghcr.io/openfoundry
+  tag: "0.1.0"
+
+global:
+  imagePullPolicy: IfNotPresent
+  imageRegistry: ""
+  imagePullSecrets: []
+  existingSecret: open-foundry-env
+  publicWebOrigin: https://openfoundry.example.com
+  labels:
+    app.kubernetes.io/part-of: openfoundry
+  podAnnotations: {}
+  podSecurityContext:
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    readOnlyRootFilesystem: false
+  terminationGracePeriodSeconds: 30
+  topologySpreadConstraints:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  networkPolicy:
+    enabled: true
+    allowSameNamespaceTraffic: true
+    additionalEgressCidrs: []
+  platformProfile:
+    enabled: true
+    configMapName: openfoundry-platform-profile
+  probes:
+    readiness:
+      enabled: true
+      path: /healthz
+      initialDelaySeconds: 8
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+    liveness:
+      enabled: true
+      path: /healthz
+      initialDelaySeconds: 20
+      periodSeconds: 20
+      timeoutSeconds: 3
+      failureThreshold: 3
+  deploymentFabric:
+    cloud: kubernetes
+    environment: shared
+    cell: core
+    region: global
+    multiCloud:
+      enabled: false
+      activeProvider: ""
+      workloadIdentity:
+        awsRoleArn: ""
+        gcpServiceAccount: ""
+        azureClientId: ""
+      providers: []
+    airGap:
+      enabled: false
+      privateRegistry: ""
+      releaseBundle: ""
+      disablePublicEgress: false
+      mirrorRegistries: []
+      allowedEgressCidrs: []
+    geoRestrictions:
+      enabled: false
+      allowedCountries: []
+      allowedIngressCidrs: []
+      allowedEgressCidrs: []
+      ingressAnnotations: {}
+      requiredNodeLabels: {}
+      residencyLabel: ""
+  cassandra:
+    localDc: dc1
+  kafka:
+    bootstrap: ""
+    topicPrefix: ""
+
+migrations:
+  pg-schemas:
+    enabled: false
+
+services:
+  model-catalog-service:
+    replicas: 2
+    ports:
+      - name: http
+        containerPort: 8080
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+
+  model-deployment-service:
+    replicas: 2
+    ports:
+      - name: http
+        containerPort: 8080
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+  agent-runtime-service:
+    replicas: 3
+    ports:
+      - name: http
+        containerPort: 8080
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+  llm-catalog-service:
+    replicas: 2
+    ports:
+      - name: http
+        containerPort: 8080
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+
+  retrieval-context-service:
+    replicas: 2
+    ports:
+      - name: http
+        containerPort: 8080
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+  ai-evaluation-service:
+    replicas: 2
+    ports:
+      - name: http
+        containerPort: 8080
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+
+  ai-sink:
+    replicas: 2
+    ports:
+      - name: metrics
+        containerPort: 9090
+        servicePort: 9090
+    podAnnotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+      prometheus.io/path: /metrics
+    serviceAnnotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+      prometheus.io/path: /metrics
+    probes:
+      readiness:
+        path: /healthz
+        port: metrics
+      liveness:
+        path: /healthz
+        port: metrics
+    env:
+      ICEBERG_CATALOG_URL: http://lakekeeper.lakekeeper.svc:8181
+      ICEBERG_WAREHOUSE: openfoundry-iceberg
+      METRICS_ADDR: 0.0.0.0:9090
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 512Mi
+
+  # ── ML / AIP services completed (S8.6 — full coverage) ─────────────
+  # NOTE: `model-adapter-service`, `model-lifecycle-service` and
+  # `ml-experiments-service` were merged into `model-catalog-service`
+  # (S8 consolidation, ADR-0030); they no longer ship as standalone
+  # Deployments.
+  # S8 / ADR-0030 — `model-serving-service`, `model-evaluation-service`
+  # and `model-inference-history-service` merged →
+  # `model-deployment-service`. All three were substrate-only shims
+  # over `libs/ml-kernel`; the `/api/v1/ml/{deployments/{id}/predict,
+  # deployments/{id}/drift, batch-predictions}` HTTP surfaces now hit
+  # `model-deployment-service`.
+
+  # S8 / ADR-0030 (B18) — `ai-application-generation-service` and
+  # `mcp-orchestration-service` merged → `ai-evaluation-service`. Both
+  # sources were `tools/scaffold_p59_p85.py` placeholders (`fn main() {}`
+  # stubs, generic CRUD); the schemas (`app_generation_*`, `mcp_servers`,
+  # `mcp_tools`) are preserved on the consolidated `pg-ai-eval` cluster.
+
+  # S8 / ADR-0030 — `conversation-state-service` merged →
+  # `agent-runtime-service`. The source was a substrate-only shim
+  # over `libs/ai-kernel`; agent-runtime-service is the runtime owner.
+
+  # S8 / ADR-0030 — `prompt-workflow-service` merged →
+  # `agent-runtime-service`. The source was a substrate-only shim
+  # over `libs/ai-kernel` (plus a producer-specific `ai_events.rs`
+  # mirror that has been retired in favour of agent-runtime's own).

@@ -1,0 +1,20 @@
+{
+  "name": "open-foundry",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Open-Source Data Operating System",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "dev": "pnpm --filter @izaiaspertrelly/web dev",
+    "build": "pnpm --filter @izaiaspertrelly/web build",
+    "lint": "pnpm --filter @izaiaspertrelly/web lint",
+    "test": "pnpm --filter @izaiaspertrelly/web test:unit",
+    "test:unit": "pnpm --filter @izaiaspertrelly/web test:unit",
+    "test:e2e": "pnpm --filter @izaiaspertrelly/web test:e2e",
+    "check": "pnpm --filter @izaiaspertrelly/web check"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  }
+}

@@ -1,0 +1,12 @@
+# Default ownership for the independent repository.
+* @Izaiaspertrelly
+
+# Security-sensitive areas.
+/SECURITY.md @Izaiaspertrelly
+/.github/workflows/ @Izaiaspertrelly
+/libs/auth-middleware/ @Izaiaspertrelly
+/libs/authz-cedar-go/ @Izaiaspertrelly
+/libs/audit-trail/ @Izaiaspertrelly
+/services/authorization-policy-service/ @Izaiaspertrelly
+/services/identity-federation-service/ @Izaiaspertrelly
+/infra/ @Izaiaspertrelly

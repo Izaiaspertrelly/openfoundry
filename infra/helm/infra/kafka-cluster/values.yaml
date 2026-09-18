@@ -1,0 +1,218 @@
+# Strimzi Kafka cluster values.
+#
+# Defaults are prod-shaped per ADR-0013 (3 brokers, RF=3, ISR=2, KRaft).
+# Dev profile (values-dev.yaml) reduces to 1 broker, RF=1, ISR=1.
+#
+# Optional add-ons (topics, ACLs, NetworkPolicies, Apicurio Registry,
+# region-b mirror) are gated by flags so dev can run a minimal Kafka.
+
+kafka:
+  clusterName: openfoundry
+  version: "4.1.0"
+  metadataVersion: "4.1-IV1"
+  replicas: 3
+  roles: [controller, broker]
+  replicationFactor: 3
+  minInsyncReplicas: 2
+  numPartitions: 12
+  storageClass: ceph-rbd
+  storageSize: 200Gi
+  heapSize: 3072m
+  tlsListener: true
+  resources:
+    requests: { cpu: "1", memory: "4Gi" }
+    limits:   { cpu: "2", memory: "6Gi" }
+
+# Optional sub-resources.
+topics:
+  enabled: true
+  # Cluster-wide defaults applied to every entry in `topics.list` unless
+  # the entry overrides them. `replicas` and `minInsyncReplicas` default
+  # to the cluster's `kafka.replicationFactor` / `kafka.minInsyncReplicas`
+  # (so the same list works for dev=RF1/ISR1 and prod=RF3/ISR2).
+  defaults:
+    partitions: 6
+    cleanupPolicy: delete
+    retentionMs: "604800000"          # 7d
+    compressionType: producer
+    segmentMs: "3600000"               # 1h
+  # Single source of truth for the data-plane topics. Add new entries
+  # here; the loop in `templates/kafka-topics.yaml` renders one
+  # `KafkaTopic` CR per entry. `class` becomes the
+  # `openfoundry.io/topic-class` label.
+  list:
+    # ── Legacy topics ────────────────────────────────────────────────
+    # Preserved verbatim from the pre-refactor template; do not change
+    # without coordinating with downstream consumers.
+    - name: cdc.postgres
+      class: cdc
+      partitions: 12
+      cleanupPolicy: compact
+      retentionMs: "604800000"        # 7d backstop for tombstones
+      segmentMs: "3600000"
+    - name: dataset.changes
+      class: domain
+      partitions: 12
+      cleanupPolicy: compact
+      retentionMs: "1209600000"       # 14d
+    - name: lineage.events
+      class: lineage
+      partitions: 12
+      retentionMs: "2592000000"       # 30d
+    - name: model.inferences
+      class: ml
+      partitions: 12
+      retentionMs: "2592000000"       # 30d
+    - name: audit.events
+      class: audit
+      partitions: 12
+      retentionMs: "7776000000"       # 90d (compliance)
+
+    # ── Foundry-pattern topics (Tarea 2.3) ──────────────────────────
+    # Producers publish via the outbox / EventRouter SMT
+    # (see `infra/helm/infra/debezium/`). Naming follows ADR-0022
+    # (`<domain>.<entity>.v<N>`).
+    - name: automate.condition.v1
+      class: automate
+    - name: automate.outcome.v1
+      class: automate
+      retentionMs: "1209600000"       # 14d (replay window for outcomes)
+    # approval.events.v1 — kept for legacy / broadcast feed (audit
+    # analytics pipelines that read the union of approval lifecycle
+    # events). The FASE 7 / Tarea 7.3 runtime publishes the typed
+    # `.v1` topics below; deprecation gate lives with the FASE 9
+    # cleanup of the legacy substrate.
+    - name: approval.events.v1
+      class: approval
+      retentionMs: "2592000000"       # 30d (approval audit replay)
+    # FASE 7 / Tarea 7.2 — typed approval lifecycle topics.
+    # Wire-format payloads are pinned in
+    # `services/approvals-service/src/event.rs` (Tarea 7.3). The
+    # 30d retention matches `approval.events.v1` so audit consumers
+    # can replay the same window from either substrate during the
+    # cutover.
+    - name: approval.requested.v1
+      class: approval
+      retentionMs: "2592000000"
+    - name: approval.decided.v1
+      class: approval
+      retentionMs: "2592000000"
+    - name: approval.completed.v1
+      class: approval
+      retentionMs: "2592000000"
+    - name: approval.expired.v1
+      class: approval
+      retentionMs: "2592000000"
+    - name: ontology.changes.v1
+      class: ontology
+    - name: ontology.reindex.v1
+      class: ontology
+    # FASE 4 / Tarea 4.2 — control-plane trigger and completion topics
+    # for `services/reindex-coordinator-service` (Rust replacement for
+    # the Go `workers-go/reindex` Temporal worker per ADR-0021/ADR-0038).
+    # `requested.v1` is the input event the coordinator consumes; the
+    # coordinator owns the resume cursor in `pg-runtime-config.reindex_jobs`,
+    # so the producer of `requested.v1` MUST NOT supply one.
+    # `completed.v1` is the terminal-status event published when a job
+    # transitions to `completed` / `failed` / `cancelled`.
+    - name: ontology.reindex.requested.v1
+      class: ontology
+    - name: ontology.reindex.completed.v1
+      class: ontology
+    # saga.step.v1 — kept for legacy / broadcast / cross-saga
+    # diagnostic feed. Not used by the FASE 6 / Tarea 6.3 saga
+    # runtime, which subscribes to the four typed `.v1` topics
+    # below. Deprecation gate lives with the FASE 9 / Tarea 9.x
+    # cleanup of the legacy substrate.
+    - name: saga.step.v1
+      class: saga
+      retentionMs: "1209600000"       # 14d (saga replay window)
+    # FASE 6 / Tarea 6.2 — typed Saga choreography topics.
+    # Wire-format payloads are pinned in `libs/saga/src/events.rs`.
+    # The `libs/saga::SagaRunner` runner emits the outbound topics
+    # (completed / failed / compensated / completed-saga / aborted)
+    # via the transactional outbox + Debezium EventRouter SMT;
+    # producers (HTTP handlers, k8s CronJobs, upstream domain
+    # events) publish to the inbound topics (requested,
+    # compensate). Topic provisioning matches the rest of the
+    # Foundry-pattern catalog: 14d retention as the operator
+    # replay window, with one DLQ per topic at the same retention.
+    - name: saga.step.requested.v1
+      class: saga
+      retentionMs: "1209600000"
+    - name: saga.step.completed.v1
+      class: saga
+      retentionMs: "1209600000"
+    - name: saga.step.failed.v1
+      class: saga
+      retentionMs: "1209600000"
+    - name: saga.step.compensated.v1
+      class: saga
+      retentionMs: "1209600000"
+    - name: saga.compensate.v1
+      class: saga
+      retentionMs: "1209600000"
+    - name: saga.completed.v1
+      class: saga
+      retentionMs: "1209600000"
+    - name: saga.aborted.v1
+      class: saga
+      retentionMs: "1209600000"
+    - name: pipeline.builds.v1
+      class: pipeline
+      retentionMs: "1209600000"       # 14d
+    # Note: `audit.events.v1` lives in `topics-domain-v1.yaml` already;
+    # do not re-declare it here.
+
+    # ── DLQs — one per Foundry-pattern topic ────────────────────────
+    # 14d retention is long enough for triage; partition count tracks
+    # the source topic so a poisoned key keeps its ordering on the DLQ.
+    - { name: __dlq.automate.condition.v1, class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.automate.outcome.v1,   class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.approval.events.v1,    class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.approval.requested.v1, class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.approval.decided.v1,   class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.approval.completed.v1, class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.approval.expired.v1,   class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.ontology.changes.v1,   class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.ontology.reindex.v1,   class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.ontology.reindex.requested.v1, class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.ontology.reindex.completed.v1, class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.saga.step.v1,          class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.saga.step.requested.v1,   class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.saga.step.completed.v1,   class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.saga.step.failed.v1,      class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.saga.step.compensated.v1, class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.saga.compensate.v1,       class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.saga.completed.v1,        class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.saga.aborted.v1,          class: dlq, retentionMs: "1209600000" }
+    - { name: __dlq.pipeline.builds.v1,    class: dlq, retentionMs: "1209600000" }
+
+acls:             { enabled: true }
+topicsDomainV1:   { enabled: true }
+networkPolicies:  { enabled: true }
+apicurio:
+  enabled: true
+  # Tarea 4.4 — register the `ontology.reindex.v1` JSON Schema into
+  # Apicurio Registry on chart install/upgrade
+  # (templates/apicurio-schemas-job.yaml). Source of truth lives at
+  # services/ontology-indexer/schemas/ontology.reindex.v1.json and is
+  # mirrored to files/schemas/ here (drift-guarded by the
+  # `helm_chart_copy_is_in_sync_with_source` unit test in
+  # services/ontology-indexer).
+  registerSchemas: true
+  # Namespace where the schema-registration ConfigMap + Job are
+  # created. Defaults to the same `apicurio` namespace where the
+  # registry itself runs.
+  schemasNamespace: apicurio
+  # In-cluster URL for Apicurio Registry. Override if the registry
+  # is deployed under a different service name / namespace.
+  baseUrl: http://apicurio-registry.apicurio.svc:8080
+  # Image used by the registration Job. Pinned so chart upgrades do
+  # not silently change the registrar runtime.
+  registrarImage: curlimages/curl:8.10.1
+  # Compatibility rule pinned on the artifact via the Apicurio Core
+  # API. BACKWARD means newer producers must keep older consumers
+  # working — the right default for the indexer cut-over of Tarea 4.4.
+  reindexV1Compatibility: BACKWARD
+regionB:          { enabled: false }

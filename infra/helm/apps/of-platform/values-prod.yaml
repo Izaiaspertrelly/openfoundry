@@ -1,0 +1,21 @@
+global:
+  deploymentFabric:
+    environment: prod
+
+services:
+  edge-gateway-service:
+    replicas: 3
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 12
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+  identity-federation-service:
+    replicas: 3
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 8
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80

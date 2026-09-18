@@ -1,0 +1,89 @@
+image:
+  registry: registry.registry.svc.cluster.local:5000
+  tag: "0.1.0"
+
+global:
+  imagePullPolicy: Always
+  autoscaling:
+    enabled: false
+  resourcesOverride:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  kafka:
+    bootstrap: openfoundry-kafka-bootstrap.kafka.svc:9092
+
+services:
+  ai-sink:
+    replicas: 1
+  agent-runtime-service:
+    envSecrets:
+      DATABASE_URL:
+        secretName: agent-runtime-db-dsn
+        key: writer_url
+      DATABASE_READ_URL:
+        secretName: agent-runtime-db-dsn
+        key: reader_url
+  # S8 / ADR-0030 (B18): ai-application-generation-service and
+  # mcp-orchestration-service merged → ai-evaluation-service.
+  model-adapter-service:
+    enabled: false
+    envSecrets:
+      DATABASE_URL:
+        secretName: model-adapter-db-dsn
+        key: writer_url
+      DATABASE_READ_URL:
+        secretName: model-adapter-db-dsn
+        key: reader_url
+  model-catalog-service:
+    envSecrets:
+      DATABASE_URL:
+        secretName: model-catalog-db-dsn
+        key: writer_url
+      DATABASE_READ_URL:
+        secretName: model-catalog-db-dsn
+        key: reader_url
+  model-lifecycle-service:
+    enabled: false
+    envSecrets:
+      DATABASE_URL:
+        secretName: model-lifecycle-db-dsn
+        key: writer_url
+      DATABASE_READ_URL:
+        secretName: model-lifecycle-db-dsn
+        key: reader_url
+  ai-evaluation-service:
+    envSecrets:
+      DATABASE_URL:
+        secretName: ai-evaluation-db-dsn
+        key: writer_url
+      DATABASE_READ_URL:
+        secretName: ai-evaluation-db-dsn
+        key: reader_url
+  llm-catalog-service:
+    envSecrets:
+      DATABASE_URL:
+        secretName: llm-catalog-db-dsn
+        key: writer_url
+      DATABASE_READ_URL:
+        secretName: llm-catalog-db-dsn
+        key: reader_url
+  model-deployment-service:
+    envSecrets:
+      DATABASE_URL:
+        secretName: model-deployment-db-dsn
+        key: writer_url
+      DATABASE_READ_URL:
+        secretName: model-deployment-db-dsn
+        key: reader_url
+  retrieval-context-service:
+    envSecrets:
+      DATABASE_URL:
+        secretName: retrieval-context-db-dsn
+        key: writer_url
+      DATABASE_READ_URL:
+        secretName: retrieval-context-db-dsn
+        key: reader_url

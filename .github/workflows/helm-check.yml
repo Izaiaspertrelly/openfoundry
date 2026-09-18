@@ -1,0 +1,37 @@
+name: CI — Helm
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/helm/**"
+      - ".github/workflows/helm-check.yml"
+      - "Makefile"
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/helm/**"
+      - ".github/workflows/helm-check.yml"
+      - "Makefile"
+
+jobs:
+  local-charts:
+    name: Helm local chart check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: Lint shared library chart
+        run: helm lint infra/helm/_shared
+      - name: Lint and render app/infra charts
+        run: |
+          set -euo pipefail
+          for chart in infra/helm/apps/* infra/helm/infra/*; do
+            [ -f "${chart}/Chart.yaml" ] || continue
+            name="$(basename "${chart}")"
+            echo ">>> ${chart}"
+            helm lint "${chart}"
+            helm template "${name}" "${chart}" > "/tmp/${name}.yaml"
+          done

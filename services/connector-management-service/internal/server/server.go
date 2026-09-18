@@ -1,0 +1,213 @@
+// Package server wires the chi router for connector-management-service.
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
+
+	authmw "github.com/Izaiaspertrelly/openfoundry/libs/auth-middleware"
+	"github.com/Izaiaspertrelly/openfoundry/libs/capabilities"
+	"github.com/Izaiaspertrelly/openfoundry/libs/core-models/health"
+	"github.com/Izaiaspertrelly/openfoundry/libs/observability"
+	"github.com/Izaiaspertrelly/openfoundry/services/connector-management-service/internal/config"
+	"github.com/Izaiaspertrelly/openfoundry/services/connector-management-service/internal/handlers"
+)
+
+type ReadyCheck func(context.Context) error
+
+// New constructs the connector-management HTTP server.
+//
+// Probes registered via Probes argument show up under /_meta/health.
+var Probes []capabilities.DependencyProbe
+
+func New(cfg *config.Config, jwt *authmw.JWTConfig, h *handlers.Handlers, m *observability.Metrics, readyChecks ...ReadyCheck) *http.Server {
+	r := chi.NewRouter()
+	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer, chimw.Compress(5))
+	r.Use(chimw.Timeout(30 * time.Second))
+
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(health.OK(cfg.Service.Name, cfg.Service.Version))
+	})
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("ok"))
+	})
+	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		for _, check := range readyChecks {
+			if check == nil {
+				continue
+			}
+			if err := check(r.Context()); err != nil {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": "not_ready", "error": err.Error()})
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+	})
+	r.Method(http.MethodGet, "/metrics", m.Handler())
+
+	// Capability registry — see docs/agent-automation/AGENT-CAPABILITIES-ROADMAP.md (M1.1).
+	caps := capabilities.New(cfg.Service.Name, cfg.Service.Version)
+	// M1.2 follow-up: probes are wired here once dependency probes are registered.
+	for _, p := range Probes {
+		caps.RegisterDependency(p)
+	}
+	caps.Mount(r)
+
+	// Rust main.rs builds some route groups under nested Axum routers before mounting
+	// them below /api/v1. The parity audit reports those inner groups separately,
+	// so keep focused root aliases for complete vertical batches while the
+	// canonical app surface remains /api/v1/data-connection/*.
+	r.Route("/data-connection", func(dc chi.Router) {
+		dc.Use(authmw.Middleware(jwt, authmw.Options{AllowAnonymous: true}))
+
+		// Virtual table registration surface: discovery, bulk registration,
+		// auto-registration configuration/status, deletion, and query endpoints.
+		dc.Get("/sources/{id}/registrations", h.ListRegistrations)
+		dc.Post("/sources/{id}/registrations/discover", h.DiscoverRegistrations)
+		dc.Post("/sources/{id}/registrations/bulk", h.BulkRegister)
+		dc.Post("/sources/{id}/registrations/bulk/preview", h.BulkRegisterPreview)
+		dc.Post("/sources/{id}/registrations/auto", h.AutoRegister)
+		dc.Put("/sources/{id}/registrations/auto", h.UpdateAutoRegistration)
+		dc.Get("/sources/{id}/registrations/auto/status", h.AutoRegisterStatus)
+		dc.Delete("/sources/{source_id}/registrations/{registration_id}", h.DeleteRegistration)
+		dc.Post("/sources/{source_id}/registrations/{registration_id}/query", h.QueryRegistration)
+		dc.Post("/sources/{source_id}/registrations/{registration_id}/query/arrow", h.QueryRegistrationArrow)
+	})
+
+	// HTTPS inbound listeners are authenticated by their listener signature, so
+	// they intentionally sit outside the JWT-protected /api/v1 route group.
+	r.Post("/api/v1/listeners/{id}/events", h.ReceiveInboundListener)
+	r.Post("/api/v1/data-connection/sources/{source_id}/listeners/{listener_id}/events", h.ReceiveInboundListener)
+
+	r.Route("/api/v1", func(api chi.Router) {
+		api.Use(authmw.Middleware(jwt, authmw.Options{AllowAnonymous: true}))
+
+		// Data Connection catalog/read surfaces stay open during bring-up, matching Rust's optional auth layer.
+		api.Get("/data-connection/catalog", h.GetConnectorCatalog)
+		api.Get("/data-connection/catalog/contracts", h.GetConnectorContracts)
+		api.Get("/data-connection/streaming-sources", h.ListStreamingSources)
+
+		// Source CRUD uses the same implementation as the legacy /connections aliases.
+		api.Get("/data-connection/sources", h.ListConnections)
+		api.Post("/data-connection/sources", h.CreateConnection)
+		api.Get("/data-connection/sources/{id}", h.GetConnection)
+		api.Delete("/data-connection/sources/{id}", h.DeleteConnection)
+		api.Post("/data-connection/sources/{id}/test-connection", h.TestConnection)
+		api.Get("/data-connection/sources/{id}/capabilities", h.GetConnectionCapabilities)
+		api.Get("/data-connection/sources/{id}/credentials", h.ListCredentials)
+		api.Post("/data-connection/sources/{id}/credentials", h.SetCredential)
+		api.Get("/data-connection/agents", h.ListConnectorAgents)
+		api.Post("/data-connection/agents", h.RegisterConnectorAgent)
+		api.Post("/data-connection/agents/{id}/heartbeat", h.HeartbeatConnectorAgent)
+		api.Delete("/data-connection/agents/{id}", h.DeleteConnectorAgent)
+		api.Get("/data-connection/sources/{id}/egress-policies", h.ListSourcePolicies)
+		api.Post("/data-connection/sources/{id}/egress-policies", h.AttachPolicy)
+		api.Delete("/data-connection/sources/{source_id}/egress-policies/{policy_id}", h.DetachPolicy)
+
+		api.Get("/data-connection/sources/{id}/syncs", h.ListSyncJobs)
+		api.Post("/data-connection/syncs", h.CreateSyncJob)
+		api.Get("/data-connection/syncs/{id}", h.GetSyncJob)
+		api.Patch("/data-connection/syncs/{id}", h.UpdateSyncJob)
+		api.Post("/data-connection/syncs/{id}/run", h.RunSyncJob)
+		api.Get("/data-connection/syncs/{id}/runs", h.ListRuns)
+
+		api.Get("/data-connection/sources/{id}/media-set-syncs", h.ListMediaSetSyncs)
+		api.Post("/data-connection/sources/{id}/media-set-syncs", h.CreateMediaSetSync)
+		api.Get("/data-connection/media-set-syncs/{id}", h.GetMediaSetSync)
+		api.Patch("/data-connection/media-set-syncs/{id}", h.UpdateMediaSetSync)
+		api.Post("/data-connection/media-set-syncs/{id}/run", h.RunMediaSetSync)
+
+		api.Get("/data-connection/sources/{id}/registrations", h.ListRegistrations)
+		api.Post("/data-connection/sources/{id}/registrations/discover", h.DiscoverRegistrations)
+		api.Post("/data-connection/sources/{id}/registrations/bulk", h.BulkRegister)
+		api.Post("/data-connection/sources/{id}/registrations/bulk/preview", h.BulkRegisterPreview)
+		api.Post("/data-connection/sources/{id}/registrations/auto", h.AutoRegister)
+		api.Put("/data-connection/sources/{id}/registrations/auto", h.UpdateAutoRegistration)
+		api.Get("/data-connection/sources/{id}/registrations/auto/status", h.AutoRegisterStatus)
+		api.Delete("/data-connection/sources/{source_id}/registrations/{registration_id}", h.DeleteRegistration)
+		api.Post("/data-connection/sources/{source_id}/registrations/{registration_id}/query", h.QueryRegistration)
+		api.Post("/data-connection/sources/{source_id}/registrations/{registration_id}/query/arrow", h.QueryRegistrationArrow)
+
+		api.Get("/connections", h.ListConnections)
+		api.Post("/connections", h.CreateConnection)
+		api.Get("/connections/{id}", h.GetConnection)
+		api.Patch("/connections/{id}", h.UpdateConnection)
+		api.Delete("/connections/{id}", h.DeleteConnection)
+		api.Post("/connections/{id}/test", h.TestConnection)
+
+		api.Post("/webhooks/{id}/invoke", h.InvokeWebhook)
+		api.Get("/webhooks/{id}/history", h.ListWebhookHistory)
+		api.Get("/data-connection/sources/{id}/webhook-history", h.ListWebhookHistory)
+		api.Get("/listeners/{id}/events", h.ListInboundListenerEvents)
+		api.Get("/data-connection/sources/{id}/listener-events", h.ListInboundListenerEvents)
+
+		if cfg.OpenFoundryDevAuth {
+			api.Post("/auth/login", h.DevAuthLogin)
+			api.Post("/auth/refresh", h.DevAuthRefresh)
+			api.Get("/auth/bootstrap-status", h.DevAuthBootstrapStatus)
+			api.Get("/users/me", h.DevAuthMe)
+		}
+
+		api.Post("/virtual-table/sources/{source_rid}/enable", h.EnableVirtualTableSource)
+		api.Post("/virtual-table/sources/{source_rid}/virtual-tables", h.CreateVirtualTable)
+		api.Get("/virtual-tables", h.ListVirtualTables)
+		api.Get("/virtual-tables/{rid}", h.GetVirtualTable)
+	})
+
+	r.Route("/iceberg/v1", func(iceberg chi.Router) {
+		iceberg.Use(authmw.Middleware(jwt, authmw.Options{AllowAnonymous: true}))
+		iceberg.Get("/config", h.IcebergGetConfig)
+		iceberg.Get("/namespaces", h.IcebergListNamespaces)
+		iceberg.Get("/namespaces/{namespace}", h.IcebergGetNamespace)
+		iceberg.Get("/namespaces/{namespace}/tables", h.IcebergListTables)
+		iceberg.Get("/namespaces/{namespace}/tables/{table}", h.IcebergLoadTable)
+	})
+
+	if _, err := caps.IngestChiRoutes(r, capabilities.IngestOptions{
+		IDPrefix:  "connector-management",
+		AuthPaths: []string{"/api/v1", "/data-connection"},
+		Tags:      []string{"data-connection"},
+	}); err != nil {
+		panic("connector-management-service: capability ingest failed: " + err.Error())
+	}
+
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	return &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
+func Run(ctx context.Context, srv *http.Server, log *slog.Logger) error {
+	errCh := make(chan error, 1)
+	go func() {
+		log.Info("listening", slog.String("addr", srv.Addr))
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		log.Info("shutting down")
+		return srv.Shutdown(shutdownCtx)
+	case err := <-errCh:
+		return err
+	}
+}
