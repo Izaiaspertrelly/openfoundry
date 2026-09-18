@@ -56,9 +56,9 @@ resource "helm_release" "rook_ceph" {
       crds = {
         enabled = true
       }
-      enableDiscoveryDaemon         = true
-      currentNamespaceOnly          = false
-      monitoring                    = { enabled = var.enable_monitoring }
+      enableDiscoveryDaemon = true
+      currentNamespaceOnly  = false
+      monitoring            = { enabled = var.enable_monitoring }
       csi = {
         enableRbdDriver    = true
         enableCephfsDriver = true

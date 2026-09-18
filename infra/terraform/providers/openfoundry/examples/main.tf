@@ -38,27 +38,27 @@ resource "openfoundry_audit_policy" "pii_retention" {
 }
 
 resource "openfoundry_product_fleet" "ops_center" {
-  listing_id            = "01968b70-4f20-71b8-a6f0-0f4000001001"
-  name                  = "Ops Center Fleet"
-  environment           = "production"
-  workspace_targets     = ["Operations Center - EU", "Operations Center - US"]
-  release_channel       = "stable"
-  auto_upgrade_enabled  = true
-  maintenance_window    = jsonencode({
+  listing_id           = "01968b70-4f20-71b8-a6f0-0f4000001001"
+  name                 = "Ops Center Fleet"
+  environment          = "production"
+  workspace_targets    = ["Operations Center - EU", "Operations Center - US"]
+  release_channel      = "stable"
+  auto_upgrade_enabled = true
+  maintenance_window = jsonencode({
     timezone         = "UTC"
     days             = ["sun"]
     start_hour_utc   = 2
     duration_minutes = 180
   })
-  branch_strategy       = "isolated_branch_per_feature"
-  rollout_strategy      = "rolling"
+  branch_strategy  = "isolated_branch_per_feature"
+  rollout_strategy = "rolling"
 }
 
 resource "openfoundry_enrollment_branch" "ops_shift_handovers" {
-  fleet_id           = openfoundry_product_fleet.ops_center.id
-  name               = "feature/shift-handovers"
-  repository_branch  = "release/ops-center/feature-shift-handovers"
-  notes              = "Sandbox branch for handover widgets before rollout promotion."
+  fleet_id          = openfoundry_product_fleet.ops_center.id
+  name              = "feature/shift-handovers"
+  repository_branch = "release/ops-center/feature-shift-handovers"
+  notes             = "Sandbox branch for handover widgets before rollout promotion."
 }
 
 resource "openfoundry_deployment_cell" "eu_regulated" {
@@ -78,11 +78,11 @@ resource "openfoundry_geo_fence_policy" "eu_only" {
   allowed_countries     = ["ES", "FR", "DE", "IT", "NL"]
   allowed_ingress_cidrs = ["185.10.0.0/16", "194.25.0.0/16"]
   allowed_egress_cidrs  = ["10.40.0.0/16", "10.41.0.0/16"]
-  required_node_labels  = jsonencode({
+  required_node_labels = jsonencode({
     "topology.kubernetes.io/region" = "eu-west-1"
     "openfoundry.io/residency"      = "eu"
   })
-  default_action        = "deny"
+  default_action = "deny"
 }
 
 resource "openfoundry_airgap_bundle" "sovereign_release" {
